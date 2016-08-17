@@ -1,0 +1,151 @@
+#!/bin/Rscript
+#
+# Fit and evaluate Gradient Boosting Model.
+#
+# [Format]
+#   fit_gbm o= l= [ex=] [i=] [f=] [trn=] [tst=]
+#
+# [Parameters]
+#   o=    A root of output directory.
+#   l=    A label field name to be predicted. 
+#   ex=   List of feature names excluded from independent variables.
+#   i=    An input csv file name containing training and test data set. 
+#         If not specified, trn= and tst= must be specified.
+#   f=    Fraction of test data set, must be specified with i=.
+#   trn=  An input csv file of training data set.
+#   tst=  An input csv file of test data set.
+#
+# [TODO]
+#   1. Validation to check if f is numerical and in the range 0 - 1.
+#   2. Validation to check file existence.
+#   3. Options how to split i= into training and test.
+#
+
+
+# -----------------------------------------------------------------------------
+# Constants  ------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+PARAMS <- c("o", "l", "ex", "i", "f", "trn", "tst")
+
+
+# -----------------------------------------------------------------------------
+# Read parameters & validations -----------------------------------------------
+# -----------------------------------------------------------------------------
+args <- commandArgs(trailingOnly = T)
+args <- sapply(args, USE.NAMES = F, FUN = function(x) {
+  arg <- unlist(strsplit(x, "="))
+  # validation 1 - grammer
+  if(length(arg) != 2) stop(paste("Invalid parameter :", x))
+  if(!(arg[1] %in% PARAMS)) stop(paste("Unknown parameter :", arg[1]))
+  setNames(arg[2], arg[1])
+})
+
+# validation 2 - must have
+if(!("o" %in% names(args))) stop("parameter o= is missing.")
+if(!("l" %in% names(args))) stop("parameter l= is missing.")
+
+
+# validation 3 - combination
+if("i" %in% names(args)) {
+  if("trn" %in% names(args)) stop("i= and trn= should not be specified at the same time.")
+  if("tst" %in% names(args)) stop("i= and tst= should not be specified at the same time.")
+  if(!("f" %in% names(args))) stop("Specify the fraction of test data set by f=.")
+} else {
+  if(!("trn" %in% names(args)) | !("trn" %in% names(args)))
+    stop("When i= is not specified, both trn= and tst= should be specified.")
+}
+
+# validation 4 - number check
+# [TODO]
+
+# validation 5 - if files exist
+# [TODO]
+
+
+
+# -----------------------------------------------------------------------------
+# Main process ----------------------------------------------------------------
+# -----------------------------------------------------------------------------
+main <- function(args) {
+  #
+  # Main process to fit gbm.
+  #
+  
+  # library
+  suppressWarnings(suppressMessages({
+    require(data.table)
+  }))
+  
+  # read csv file
+  if("i" %in% names(args)) {
+    # only one file is specified.
+    df <- fread(args['i'], stringsAsFactors = T, data.table = F)
+    # separate data set into training and test
+    # [TODO] more options how to split
+    train_idx <- round(nrow(df) * (1 - as.numeric(args["f"])), 0)
+    train <- df[1:train_idx, ]
+    test <- df[(train_idx + 1):nrow(df), ]
+    
+  } else {
+    # train and test data sets are specified separately.
+    train <- fread(args['trn'], stringsAsFactors = T, data.table = F)
+    test <- fread(args['tst'], stringsAsFactors = T, data.table = F)
+    
+  }
+  
+  # features excluded
+  ex <- NULL
+  if('ex' %in% names(args)) {
+    ex <- unlist(strsplit(args['ex'], ","))
+  }
+  
+  # set output directory
+  OUTDIR <- file.path(args['o'], "gbm", format(Sys.time(), "%Y%m%d%H%M%S"))
+  if(!file.exists(OUTDIR)) dir.create(OUTDIR, recursive = T)
+  
+  # modeling
+  source("fit_gbm.R")
+  model <- fit_gbm(train, label = args['l'], exclude = ex, grid = NULL)
+  
+  # save model
+  model_file_path <- file.path(OUTDIR, "model_gbm.rds")
+  saveRDS(model, file = model_file_path)
+  
+  # predict labels on test dataset
+  pred <- as.data.frame(predict(model, test, n.trees = 50, type = "response"))
+  names(pred) <- gsub(".50", "", names(pred))
+  pred_labels <- as.factor(colnames(pred)[max.col(pred)])
+  
+  # get model performance
+  source("evaluate_classification.R")
+  performance <- evaluate_classification(actual = test$failure, predicted = pred_labels)
+  
+  # save model performance
+  cm_file_path <- file.path(OUTDIR, "confusion_matrix.csv")
+  metrics_file_path <- file.path(OUTDIR, "metrics.csv")
+  write.csv(performance$confusion_matrix, cm_file_path)
+  write.csv(t(performance$metrics), metrics_file_path)
+  
+  # visualize confusion matrix
+  source("viz_confusion_matrix.R")
+  viz <- viz_confusion_matrix(performance$confusion_matrix)
+  viz_file_path <- file.path(OUTDIR, "confusion_matrix.pdf")
+  pdf(viz_file_path, width = 7, height = 5)
+  print(viz)
+  dev.off()
+  
+  # return file names
+  return(list(model = model_file_path, 
+              confusion_matrix = cm_file_path,
+              metrics = metrics_file_path,
+              viz = viz_file_path))
+}
+
+
+# -----------------------------------------------------------------------------
+# Execute main process --------------------------------------------------------
+# -----------------------------------------------------------------------------
+file_names <- main(args)
+print(file_names)
+
+# end
