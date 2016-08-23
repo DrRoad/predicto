@@ -199,7 +199,7 @@ shinyServer(function(input, output, session) {
                              "Failure Probability"),
                 filter = "none",
                 style = "bootstrap",
-                options = list(scrollY = "800px",
+                options = list(scrollY = "500px",
                                searching = F,
                                lengthChange = F,
                                paging = F)) %>%
