@@ -3,13 +3,14 @@ library(DT)
 library(data.table)
 library(ggplot2)
 library(foreach)
+library(zoo)
 source("model_facade.R")
 
 shinyServer(function(input, output, session) {
   
   rv <- reactiveValues(df_org = NULL,     # original data.frame loaded
                        df_ctrl = NULL,    # controled data.frame by percentage slide bar
-                       plot = NULL,       # a list of plot features in explore tab
+                       plot_var = NULL,   # a variable name plotted
                        logit = NULL,      # |
                        nb = NULL,         # |
                        svm = NULL,        # modeling result
@@ -22,21 +23,15 @@ shinyServer(function(input, output, session) {
                        pred_ctrl = NULL)  # controled result by probability slide bar
   
   # ---------------------------------------------------------------------------
-  # Explore tab ---------------------------------------------------------------
+  # Load tab ------------------------------------------------------------------
   # ---------------------------------------------------------------------------
   
   # load button
   observeEvent(input$load, {
-    # data
-    rv$df_org <- fread(file.path("./input/demo", input$data), stringsAsFactors=T, data.table=F)
+    # entire data set
+    rv$df_org <- fread(file.path("./input/demo", input$source), stringsAsFactors=T, data.table=F)
+    # data set controled by percentage slide bar
     rv$df_ctrl <- rv$df_org[1:get_num_rows(nrow(rv$df_org), input$percent), ]
-    
-    # default plot setting (only for 1st request)
-    if (is.null(rv$plot)) {
-      rv$plot <- list(type = "bar",
-                      var = "failure",
-                      fill = "model")
-    }
   })
   
   # percentage slide bar
@@ -45,68 +40,45 @@ shinyServer(function(input, output, session) {
     rv$df_ctrl <- rv$df_org[1:get_num_rows(nrow(rv$df_org), input$percent), ]
   })
   
-  # plot
-  output$plot <- renderPlot({
-    # initial screen
+  # data table
+  output$datatbl <- renderDataTable({
     if (is.null(rv$df_ctrl)) return(NULL)
-    
-    # first load
-    df <- rv$df_ctrl
-    if (is.null(input$plot_type))
-      return(make_dummy_barplot(df[df$failure != "none", ]))
-    
-    # change in select box
-    if (input$plot_type == "bar") {
-      # update setting
-      rv$plot <- list(type = "bar",
-                      var = "failure",
-                      fill = "model")
-      
-      # update ui
-      updateSelectInput(session, "plot_var", selected = rv$plot$var)
-      updateSelectInput(session, "plot_fill", selected = rv$plot$fill)
-      
-      # return plot
-      make_dummy_barplot(df[df$failure != "none", ])
-      
-    } else if (input$plot_type == "hist") {
-      # update setting
-      rv$plot <- list(type = "hist",
-                      var = "vibrationmean",
-                      fill = "none")
-      
-      # update ui
-      updateSelectInput(session, "plot_var", selected = rv$plot$var)
-      updateSelectInput(session, "plot_fill", selected = rv$plot$fill)
-      
-      # return plot
-      make_dummy_hist(df[df$failure != "none", ])
+    datatable(rv$df_ctrl,
+              container = TABLE_HEADER,
+              rownames = F,
+              filter = "top",
+              style = "bootstrap",
+              options = list(scrollX = T, scrollY = "400px")) %>%
+      formatRound(columns = names(rv$df_ctrl)[unlist(lapply(rv$df_ctrl, class)) == "numeric"], 
+                  digits = 2)
+  })
+  
+  # ---------------------------------------------------------------------------
+  # Explore tab ---------------------------------------------------------------
+  # ---------------------------------------------------------------------------
+  
+  # selectbox - variable plotted
+  output$plot_var <- renderUI({
+    if (is.null(rv$df_ctrl)) return(NULL)
+    if (is.null(input$plot_var)) {
+      selectInput("plot_var", "Variable:",
+                  choices = VAR_NAMES[c(-1, -2)],
+                  selected = "voltmean")
+    } else {
+      selectInput("plot_var", "Variable:",
+                  choices = VAR_NAMES[c(-1, -2)],
+                  selected = input$plot_var)
     }
   })
   
-  # control element - plot type
-  output$plot_type <- renderUI({
+  # plot
+  output$plot <- renderPlot({
     if (is.null(rv$df_ctrl)) return(NULL)
-    selectInput("plot_type", "Plot Type:",
-                choices = list(Barchart = "bar",
-                               Histogram = "hist"),
-                selected = isolate(rv$plot$type))
-  })
-  
-  # control element - plot variable
-  output$plot_var <- renderUI({
-    if (is.null(rv$df_ctrl)) return(NULL)
-    selectInput("plot_var", "Variable:",
-                choices = names(rv$df_ctrl),
-                selected = isolate(rv$plot$var))
-  })
-  
-  # control element - plot fill color
-  output$plot_fill <- renderUI({
-    if (is.null(rv$df_ctrl)) return(NULL)
-    selectInput("plot_fill", "Colored By:",
-                choices = c("none", names(rv$df_ctrl)),
-                selected = isolate(rv$plot$fill))
+    if (is.null(input$plot_var)) {
+      plot_1d(rv$df_ctrl, "voltmean")
+    } else {
+      plot_1d(rv$df_ctrl, input$plot_var)
+    }
   })
   
   # ---------------------------------------------------------------------------
@@ -227,12 +199,21 @@ shinyServer(function(input, output, session) {
                              "Failure Probability"),
                 filter = "none",
                 style = "bootstrap",
-                options = list(searching = F,
+                options = list(scrollY = "800px",
+                               searching = F,
                                lengthChange = F,
                                paging = F)) %>%
       formatRound(columns = "failure.probability", digits = 4)
   })
 })
+
+
+# -----------------------------------------------------------------------------
+# Constants -------------------------------------------------------------------
+# -----------------------------------------------------------------------------
+TABLE_HEADER = htmltools::withTags(table(
+  tableHeader(names(VAR_NAMES))
+))
 
 
 # -----------------------------------------------------------------------------
@@ -256,28 +237,40 @@ get_model_name <- function(abbrv) {
        gbm = "Gradient Boosting")[[abbrv]]
 }
 
-make_dummy_barplot <- function(df) {
-  ggplot(df, aes(x = failure, fill = model)) + 
-    geom_bar() +
-    guides(fill = guide_legend(
-      title = "Model",
-      title.theme = element_text(size = 24, angle = 0),
-      label.theme = element_text(size = 18, angle = 0),
-      reverse = T)) +
-    ggtitle("Count of Failure") +
-    xlab("Component") +
+
+plot_1d <- function(df, var) {
+  if (class(df[, var]) %in% c("integer", "factor")) {
+    plot_bar(df, var)
+  } else if (class(df[, var]) == "numeric") {
+    plot_hist(df, var)
+  } else {
+    stop("Unexpected class is found in data set.")
+  }
+}
+
+plot_bar <- function(df, var) {
+  ggplot(df, aes_string(x = var, fill = 1)) +
+    geom_bar(stat = "count", show.legend = F) +
+    guides(fill = F) +
+    # guides(fill = guide_legend(
+    #   title = "Model",
+    #   title.theme = element_text(size = 24, angle = 0),
+    #   label.theme = element_text(size = 18, angle = 0),
+    #   reverse = T)) +
+    ggtitle(names(VAR_NAMES)[VAR_NAMES == var]) +
+    xlab("") +
     ylab("Count") +
     theme(plot.title = element_text(size = 24),
           axis.title = element_text(size = 18),
           axis.text = element_text(size = 14))
 }
 
-make_dummy_hist <- function(df) {
-  ggplot(df, aes(x = vibrationmean, fill = 1)) +
+plot_hist <- function(df, var) {
+  ggplot(df, aes_string(x = var, fill = 1)) +
     geom_histogram(bins = 30, show.legend = F) +
     guides(fill = F) +
-    ggtitle("Mean of Vibration") +
-    xlab("Vibration") +
+    ggtitle(names(VAR_NAMES)[VAR_NAMES == var]) +
+    xlab("") +
     ylab("Frequency") +
     theme(plot.title = element_text(size = 24),
           axis.title = element_text(size = 18),

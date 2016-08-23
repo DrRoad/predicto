@@ -1,6 +1,8 @@
 library(shiny)
 library(shinythemes)
 library(DT)
+library(htmltools)
+
 
 shinyUI(fluidPage(
   theme = shinytheme("flatly"),
@@ -15,11 +17,11 @@ shinyUI(fluidPage(
       navbarPage(
         "",
         tabPanel(
-          "Explore",
+          "Load",
           sidebarLayout(
             sidebarPanel(
               width = 3,
-              selectInput("data", "Data Source:",
+              selectInput("source", "Data Source:",
                           choices = list.files("./input/demo", pattern = ".csv")),
               
               sliderInput("percent",
@@ -29,18 +31,25 @@ shinyUI(fluidPage(
                           step = 10,
                           value = 100),
               
-              actionButton("load", "Load"),
-              
-              br(),br(),br(),
-              uiOutput("plot_type"),
-              uiOutput("plot_var"),
-              uiOutput("plot_fill")
+              actionButton("load", "Load")
             ),
             
             mainPanel(
-              splitLayout(
-                plotOutput("plot")
-              )
+              dataTableOutput("datatbl")
+            )
+          )
+        ),
+        
+        tabPanel(
+          "Explore",
+          sidebarLayout(
+            sidebarPanel(
+              width = 4,
+              uiOutput("plot_var")
+            ),
+            
+            mainPanel(
+              plotOutput("plot")
             )
           )
         ),
@@ -133,6 +142,7 @@ shinyUI(fluidPage(
       "DR0032 in Factory YYY",
       navbarPage(
         "",
+        tabPanel("Load"),
         tabPanel("Explore"),
         tabPanel("Model"),
         tabPanel("Predict")
@@ -142,6 +152,7 @@ shinyUI(fluidPage(
       "PB0001 in Factory ZZZ",
       navbarPage(
         "",
+        tabPanel("Load"),
         tabPanel("Explore"),
         tabPanel("Model"),
         tabPanel("Predict")
@@ -153,6 +164,7 @@ shinyUI(fluidPage(
       "Tokyo",
       navbarPage(
         "",
+        tabPanel("Load"),
         tabPanel("Explore"),
         tabPanel("Model"),
         tabPanel("Predict")
@@ -162,6 +174,7 @@ shinyUI(fluidPage(
       "Singapore",
       navbarPage(
         "",
+        tabPanel("Load"),
         tabPanel("Explore"),
         tabPanel("Model"),
         tabPanel("Predict")
